@@ -10,9 +10,9 @@ app = FastAPI(
     version="1.0.0"
 )
 
-@app.get("/")
-def health():
-    return {"status": "ok"}
+@app.get("/health")
+def health_check():
+    return {"status": "healthy"}
 
 @app.post("/enhance")
 async def enhance_image(file: UploadFile = File(...)):
@@ -82,3 +82,4 @@ async def enhance_image(file: UploadFile = File(...)):
             "filename": "enhanced.jpg"
         }
     )
+
