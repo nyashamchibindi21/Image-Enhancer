@@ -1,32 +1,77 @@
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi.responses import Response
 import cv2
 import numpy as np
 
-app = FastAPI()
+app = FastAPI(
+    title="Image Enhancer API",
+    description="Enhances document images for OCR",
+    version="1.0.0"
+)
+
+@app.get("/")
+def health_check():
+    return {"status": "ok"}
 
 @app.post("/enhance")
-async def enhance_image(request: Request):
-    # Read raw binary body
-    contents = await request.body()
+async def enhance_image(file: UploadFile = File(...)):
+    # Validate file type
+    if file.content_type not in ["image/jpeg", "image/png"]:
+        raise HTTPException(
+            status_code=400,
+            detail="Only JPG and PNG images are supported"
+        )
 
-    # Convert to OpenCV image
-    npimg = np.frombuffer(contents, np.uint8)
-    img = cv2.imdecode(npimg, cv2.IMREAD_COLOR)
+    # Read file bytes
+    image_bytes = await file.read()
+
+    # Convert bytes to OpenCV image
+    np_image = np.frombuffer(image_bytes, np.uint8)
+    img = cv2.imdecode(np_image, cv2.IMREAD_GRAYSCALE)
 
     if img is None:
-        return {"error": "Invalid image"}
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid image file"
+        )
 
-    # OCR-optimized enhancement
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    denoised = cv2.fastNlMeansDenoising(gray, h=15)
+    # =========================
+    # IMAGE ENHANCEMENT PIPELINE
+    # =========================
 
-    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
-    contrast = clahe.apply(denoised)
+    # 1. Normalize contrast
+    normalized = cv2.normalize(img, None, 0, 255, cv2.NORM_MINMAX)
 
-    kernel = np.array([[0, -1, 0],
-                       [-1, 5, -1],
-                       [0, -1, 0]])
-    sharpened = cv2.filter2D(contrast, -1, kernel)
+    # 2. Increase contrast + brightness
+    enhanced = cv2.convertScaleAbs(
+        normalized,
+        alpha=1.4,   # contrast
+        beta=15     # brightness
+    )
 
-    _, buffer = cv2.imencode(".jpg", sharpened)
-    return buffer.tobytes()
+    # 3. Reduce noise
+    enhanced = cv2.GaussianBlur(enhanced, (3, 3), 0)
+
+    # 4. Adaptive threshold (excellent for OCR)
+    enhanced = cv2.adaptiveThreshold(
+        enhanced,
+        255,
+        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+        cv2.THRESH_BINARY,
+        31,
+        2
+    )
+
+    # Encode image back to JPEG
+    success, encoded_image = cv2.imencode(".jpg", enhanced)
+
+    if not success:
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to encode enhanced image"
+        )
+
+    return Response(
+        content=encoded_image.tobytes(),
+        media_type="image/jpeg"
+    )
