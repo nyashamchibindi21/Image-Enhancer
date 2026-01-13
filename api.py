@@ -1,16 +1,17 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException
-from fastapi.responses import Response
+from fastapi.responses import JSONResponse
 import cv2
 import numpy as np
+import base64
 
 app = FastAPI(
-    title="Image Enhancer API",
-    description="Enhances document images for OCR",
+    title="Document Image Enhancer",
+    description="Enhances document images for OCR and returns Base64-safe JSON",
     version="1.0.0"
 )
 
 @app.get("/")
-def health_check():
+def health():
     return {"status": "ok"}
 
 @app.post("/enhance")
@@ -22,37 +23,37 @@ async def enhance_image(file: UploadFile = File(...)):
             detail="Only JPG and PNG images are supported"
         )
 
-    # Read file bytes
+    # Read image bytes
     image_bytes = await file.read()
 
-    # Convert bytes to OpenCV image
+    # Decode image using OpenCV
     np_image = np.frombuffer(image_bytes, np.uint8)
-    img = cv2.imdecode(np_image, cv2.IMREAD_GRAYSCALE)
+    image = cv2.imdecode(np_image, cv2.IMREAD_GRAYSCALE)
 
-    if img is None:
+    if image is None:
         raise HTTPException(
             status_code=400,
-            detail="Invalid image file"
+            detail="Invalid image data"
         )
 
-    # =========================
+    # ===============================
     # IMAGE ENHANCEMENT PIPELINE
-    # =========================
+    # ===============================
 
     # 1. Normalize contrast
-    normalized = cv2.normalize(img, None, 0, 255, cv2.NORM_MINMAX)
+    normalized = cv2.normalize(image, None, 0, 255, cv2.NORM_MINMAX)
 
-    # 2. Increase contrast + brightness
+    # 2. Increase contrast and brightness
     enhanced = cv2.convertScaleAbs(
         normalized,
         alpha=1.4,   # contrast
         beta=15     # brightness
     )
 
-    # 3. Reduce noise
+    # 3. Noise reduction
     enhanced = cv2.GaussianBlur(enhanced, (3, 3), 0)
 
-    # 4. Adaptive threshold (excellent for OCR)
+    # 4. Adaptive threshold (OCR-friendly)
     enhanced = cv2.adaptiveThreshold(
         enhanced,
         255,
@@ -62,16 +63,22 @@ async def enhance_image(file: UploadFile = File(...)):
         2
     )
 
-    # Encode image back to JPEG
-    success, encoded_image = cv2.imencode(".jpg", enhanced)
-
+    # Encode enhanced image to JPEG
+    success, encoded = cv2.imencode(".jpg", enhanced)
     if not success:
         raise HTTPException(
             status_code=500,
-            detail="Failed to encode enhanced image"
+            detail="Failed to encode image"
         )
 
-    return Response(
-        content=encoded_image.tobytes(),
-        media_type="image/jpeg"
+    # Convert to Base64 (n8n-safe)
+    image_base64 = base64.b64encode(encoded.tobytes()).decode("utf-8")
+
+    # Return JSON-safe response
+    return JSONResponse(
+        content={
+            "image_base64": image_base64,
+            "mime_type": "image/jpeg",
+            "filename": "enhanced.jpg"
+        }
     )
